@@ -7,6 +7,7 @@ import android.util.Log
 import com.google.gson.Gson
 import com.linecorp.flutter_line_sdk.model.UserProfile
 import com.linecorp.flutter_line_sdk.util.runIfDebugBuild
+import com.linecorp.linesdk.LineApiResponse
 import com.linecorp.linesdk.LineApiResponseCode
 import com.linecorp.linesdk.Scope
 import com.linecorp.linesdk.api.LineApiClient
@@ -21,8 +22,10 @@ import com.linecorp.linesdk.unitywrapper.model.BotFriendshipStatus
 import com.linecorp.linesdk.unitywrapper.model.LoginResultForFlutter
 import com.linecorp.linesdk.unitywrapper.model.VerifyAccessTokenResult
 import io.flutter.plugin.common.MethodChannel.Result
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 
 class LineSdkWrapper(
@@ -44,7 +47,7 @@ class LineSdkWrapper(
         lineApiClient = createLineApiClient(channelId)
     }
 
-    var loginResult: Result? = null
+    private var loginResult: Result? = null
 
     fun login(
         loginRequestCode: Int,
@@ -92,19 +95,15 @@ class LineSdkWrapper(
     fun getProfile(result: Result) {
         runIfDebugBuild {  Log.d(TAG, "getProfile") }
 
-        GlobalScope.launch {
+        GlobalScope.launch(Dispatchers.IO) {
             val lineApiResponse = lineApiClient.profile
             if (!lineApiResponse.isSuccess) {
-                result.error(
-                    lineApiResponse.responseCode.name,
-                    lineApiResponse.errorData.message,
-                    null
-                )
+                returnErrorResult(result, lineApiResponse)
             } else {
                 val profileData = lineApiResponse.responseData
                 val userProfile = UserProfile.convertLineProfile(profileData)
                 val jsonString = gson.toJson(userProfile)
-                result.success(jsonString)
+                returnSuccessResult(result, jsonString)
 
                 runIfDebugBuild { Log.d(TAG, "getProfile: $jsonString") }
             }
@@ -154,57 +153,58 @@ class LineSdkWrapper(
     fun logout(result: Result) {
         runIfDebugBuild {  Log.d(TAG, "logout") }
 
-        GlobalScope.launch {
+        GlobalScope.launch(Dispatchers.IO) {
             val lineApiResponse = lineApiClient.logout()
-            if(!lineApiResponse.isSuccess) {
-                result.error(
-                    lineApiResponse.responseCode.name,
-                    lineApiResponse.errorData.message,
-                    null
-                )
-            } else {
-                result.success(null)
-            }
+            if(!lineApiResponse.isSuccess)  returnErrorResult(result, lineApiResponse)
+            else returnSuccessResult(result)
         }
     }
 
+    private suspend fun <T> returnErrorResult(result: Result, lineApiResponse: LineApiResponse<T>) =
+        withContext(Dispatchers.Main) {
+            result.error(
+                lineApiResponse.responseCode.name,
+                lineApiResponse.errorData.message,
+                null
+            )
+        }
+
+    private suspend fun returnSuccessResult(result: Result, value: Any? = null) {
+        withContext(Dispatchers.Main) { result.success(value) }
+    }
+
     fun getCurrentAccessToken(result: Result) {
-        GlobalScope.launch {
-            val lineApiResponse = lineApiClient.currentAccessToken
-            if (lineApiResponse.isSuccess) {
-                result.success(
-                    gson.toJson(
-                        AccessToken(
-                            lineApiResponse.responseData.tokenString,
-                            lineApiResponse.responseData.expiresInMillis
-                        )
+        val lineApiResponse = lineApiClient.currentAccessToken
+        if (lineApiResponse.isSuccess) {
+            result.success(
+                gson.toJson(
+                    AccessToken(
+                        lineApiResponse.responseData.tokenString,
+                        lineApiResponse.responseData.expiresInMillis / 1000
                     )
                 )
-            } else {
-                result.error(
-                    lineApiResponse.responseCode.name,
-                    lineApiResponse.errorData.message,
-                    null
-                )
-            }
+            )
+        } else {
+            result.error(
+                lineApiResponse.responseCode.name,
+                lineApiResponse.errorData.message,
+                null
+            )
         }
     }
 
     fun getBotFriendshipStatus(result: Result) {
         runIfDebugBuild {  Log.d(TAG, "getBotFriendshipStatus") }
 
-        GlobalScope.launch {
+        GlobalScope.launch(Dispatchers.IO) {
             val lineApiResponse = lineApiClient.friendshipStatus
             if (lineApiResponse.isSuccess) {
-                result.success(
+                returnSuccessResult(
+                    result,
                     gson.toJson(BotFriendshipStatus(lineApiResponse.responseData.isFriend))
                 )
             } else {
-                result.error(
-                    lineApiResponse.responseCode.name,
-                    lineApiResponse.errorData.message,
-                    null
-                )
+                returnErrorResult(result, lineApiResponse)
             }
         }
     }
@@ -212,23 +212,20 @@ class LineSdkWrapper(
     fun refreshToken(result: Result) {
         runIfDebugBuild {  Log.d(TAG, "refreshToken") }
 
-        GlobalScope.launch {
+        GlobalScope.launch(Dispatchers.IO) {
             val lineApiResponse = lineApiClient.refreshAccessToken()
             if (lineApiResponse.isSuccess) {
-                result.success(
+                returnSuccessResult(
+                    result,
                     gson.toJson(
                         AccessToken(
                             lineApiResponse.responseData.tokenString,
-                            lineApiResponse.responseData.expiresInMillis
+                            lineApiResponse.responseData.expiresInMillis / 1000
                         )
                     )
                 )
             } else {
-                result.error(
-                    lineApiResponse.responseCode.name,
-                    lineApiResponse.errorData.message,
-                    null
-                )
+                returnErrorResult(result, lineApiResponse)
             }
         }
     }
@@ -236,24 +233,21 @@ class LineSdkWrapper(
     fun verifyAccessToken(result: Result) {
         runIfDebugBuild {  Log.d(TAG, "verifyAccessToken") }
 
-        GlobalScope.launch {
+        GlobalScope.launch(Dispatchers.IO) {
             val lineApiResponse = lineApiClient.verifyToken()
             if (lineApiResponse.isSuccess) {
-                result.success(
+                returnSuccessResult(
+                    result,
                     gson.toJson(
                         VerifyAccessTokenResult(
                             channelId,
                             Scope.join(lineApiResponse.responseData.scopes),
-                            lineApiResponse.responseData.accessToken.expiresInMillis
+                            lineApiResponse.responseData.accessToken.expiresInMillis / 1000
                         )
                     )
                 )
             } else {
-                result.error(
-                    lineApiResponse.responseCode.name,
-                    lineApiResponse.errorData.message,
-                    null
-                )
+                returnErrorResult(result, lineApiResponse)
             }
         }
     }
